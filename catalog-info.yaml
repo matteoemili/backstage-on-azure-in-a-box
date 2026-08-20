@@ -1,0 +1,20 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: backstage
+  description: An example of a Backstage application.
+  annotations:
+    # Azure DevOps integration. Enables the CI/CD, Pull Requests and Git Tags
+    # tabs from @backstage-community/plugin-azure-devops.
+    # host-org format: <host>/<organization>
+    dev.azure.com/host-org: dev.azure.com/example-organization
+    # project-repo format: <project>/<repository>
+    dev.azure.com/project-repo: Backstage/Backstage
+  # Example for optional annotations
+  # annotations:
+  #   github.com/project-slug: backstage/backstage
+  #   backstage.io/techdocs-ref: dir:.
+spec:
+  type: website
+  owner: john@example.com
+  lifecycle: experimental

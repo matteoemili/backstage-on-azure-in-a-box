@@ -1,0 +1,89 @@
+app:
+  baseUrl: ${BACKSTAGE_BASE_URL}
+
+backend:
+  auth:
+    dangerouslyDisableDefaultAuthPolicy: true
+  baseUrl: ${BACKSTAGE_BASE_URL}
+  listen:
+    port: ${WEBSITES_PORT}
+    host: 0.0.0.0
+  cors:
+    origin: ${BACKSTAGE_BASE_URL}
+    methods: [GET, HEAD, PATCH, POST, PUT, DELETE]
+    credentials: true
+  database:
+    client: pg
+    connection:
+      host: ${POSTGRES_HOST}
+      port: ${POSTGRES_PORT}
+      user: ${POSTGRES_USER}
+      password: ${POSTGRES_PASSWORD}
+
+auth:
+  environment: production
+  providers:
+    guest:
+      dangerouslyAllowOutsideDevelopment: true
+    github:
+      production:
+        clientId: ${AUTH_GITHUB_CLIENT_ID}
+        clientSecret: ${AUTH_GITHUB_CLIENT_SECRET}
+        signIn:
+          resolvers:
+            # Matches the GitHub node ID against the github.com/user-id
+            # annotation (see examples/org.yaml, loaded in production too).
+            - resolver: userIdMatchingUserEntityAnnotation
+    microsoft:
+      production:
+        clientId: ${AZURE_CLIENT_ID}
+        clientSecret: ${AZURE_CLIENT_SECRET}
+        tenantId: ${AZURE_TENANT_ID}
+        domainHint: ${AZURE_TENANT_ID}
+        signIn:
+          resolvers:
+            - resolver: userIdMatchingUserEntityAnnotation
+            - resolver: emailMatchingUserEntityAnnotation
+            - resolver: emailMatchingUserEntityProfileEmail
+            - resolver: emailLocalPartMatchingUserEntityName
+        additionalScopes:
+          - Mail.Send
+
+catalog:
+  # Overrides the default list locations from app-config.yaml as these contain example data.
+  # See https://backstage.io/docs/features/software-catalog/#adding-components-to-the-catalog for more details
+  # on how to get entities into the catalog.
+  providers:
+    microsoftGraphOrg:
+      default:
+        tenantId: ${AZURE_TENANT_ID}
+        user:
+          filter: accountEnabled eq true and userType eq 'member'
+        group:
+          filter: >
+            securityEnabled eq false
+            and mailEnabled eq true
+            and groupTypes/any(c:c+eq+'Unified')
+        schedule:
+          frequency: { hours: 0, minutes: 10 }
+          timeout: { minutes: 10 }
+  locations:
+    # Local example data, replace this with your production config, these are intended for demo use only.
+    # File locations are relative to the backend process, typically in a deployed context, such as in a Docker container, this will be the root
+    - type: file
+      target: ./examples/entities.yaml
+
+    # Local example template
+    - type: file
+      target: ./examples/template/template.yaml
+      rules:
+        - allow: [Template]
+
+    # Local example organizational data
+    - type: file
+      target: /tmp/backstage-org.yaml
+      rules:
+        - allow: [User, Group]
+
+permission:
+  enabled: false

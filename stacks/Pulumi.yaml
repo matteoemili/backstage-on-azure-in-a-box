@@ -1,0 +1,348 @@
+name: backstage
+description: Backstage Azure infrastructure in Pulumi YAML
+runtime: yaml
+
+config:
+  pulumi:tags:
+    value:
+      pulumi:template: azure-yaml
+  environmentName:
+    type: string
+  deploymentLocation:
+    type: string
+    default: uksouth
+  resourceGroupName:
+    type: string
+  githubToken:
+    type: string
+    secret: true
+  githubOAuthClientId:
+    type: string
+  githubOrg:
+    type: string
+    default: example-organization
+  githubOAuthClientSecret:
+    type: string
+    secret: true
+  azureDevOpsPat:
+    type: string
+    secret: true
+  techRadarUrl:
+    type: string
+    secret: true
+  azureDevOpsOrganization:
+    type: string
+  azureDevOpsProject:
+    type: string
+  azureDevOpsRepository:
+    type: string
+  catalogOrgYamlBase64:
+    type: string
+
+variables:
+  azureadConfig:
+    fn::invoke:
+      function: azuread:index:getClientConfig
+      arguments: {}
+
+  registryCredentials:
+    fn::invoke:
+      function: azure-native:containerregistry:listRegistryCredentials
+      arguments:
+        resourceGroupName: ${resourceGroup.name}
+        registryName: ${backstageContainerRegistry.name}
+
+  acrPullRoleDefinition:
+    fn::invoke:
+      function: azure-native:authorization:getRoleDefinition
+      arguments:
+        roleDefinitionId: 7f951dda-4ed3-4680-a7ca-43fe172d538d
+        scope: ${backstageContainerRegistry.id}
+
+  keyVaultSecretsUserRoleDefinition:
+    fn::invoke:
+      function: azure-native:authorization:getRoleDefinition
+      arguments:
+        roleDefinitionId: 4633458b-17de-408a-b874-0445c86b69e6
+        scope: ${backstageKeyVault.id}
+
+resources:
+  resourceGroup:
+    type: azure-native:resources:ResourceGroup
+    properties:
+      resourceGroupName: ${resourceGroupName}
+
+  resourceNameSuffix:
+    type: random:RandomString
+    properties:
+      length: 6
+      special: false
+      upper: false
+
+  databasePassword:
+    type: random:RandomPassword
+    properties:
+      length: 32
+      special: true
+      overrideSpecial: '!#$%&*()-_=+'
+
+  backstageContainerRegistry:
+    type: azure-native:containerregistry:Registry
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      registryName: backstage${resourceNameSuffix.result}
+      sku:
+        name: Basic
+      identity:
+        type: SystemAssigned
+      adminUserEnabled: true
+
+  backstageAzureApplication:
+    type: azuread:index:Application
+    properties:
+      displayName: backstage-${environmentName}-${resourceNameSuffix.result}
+      web:
+        redirectUris:
+          - https://backstage-${environmentName}-${resourceNameSuffix.result}.azurewebsites.net/api/auth/microsoft/handler/frame
+
+  backstageAzureServicePrincipal:
+    type: azuread:index:ServicePrincipal
+    properties:
+      clientId: ${backstageAzureApplication.clientId}
+      tags:
+        - backstage
+
+  backstageAzureApplicationPassword:
+    type: azuread:index:ApplicationPassword
+    properties:
+      applicationId: ${backstageAzureApplication.id}
+      endDateRelative: 8760h
+
+  backstageImage:
+    type: docker-build:index:Image
+    properties:
+      context:
+        location: ..
+      dockerfile:
+        location: ../packages/backend/Dockerfile
+      platforms:
+        - linux/amd64
+      push: true
+      tags:
+        - ${backstageContainerRegistry.loginServer}/backstage:latest
+      registries:
+        - address: ${backstageContainerRegistry.loginServer}
+          username: ${registryCredentials.username}
+          password: ${registryCredentials.passwords[0].value}
+
+  backstageOperationalInsightsWorkspace:
+    type: azure-native:operationalinsights:Workspace
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      retentionInDays: 30
+      sku:
+        name: PerGB2018
+
+  backstageAppInsights:
+    type: azure-native:applicationinsights:Component
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      applicationType: other
+      kind: other
+      workspaceResourceId: ${backstageOperationalInsightsWorkspace.id}
+
+  backstageKeyVault:
+    type: azure-native:keyvault:Vault
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: backstage-${resourceNameSuffix.result}
+      properties:
+        tenantId: ${azureadConfig.tenantId}
+        enableRbacAuthorization: true
+        enablePurgeProtection: true
+        softDeleteRetentionInDays: 7
+        sku:
+          family: A
+          name: standard
+
+  postgresPasswordSecret:
+    type: azure-native:keyvault:Secret
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: ${backstageKeyVault.name}
+      secretName: postgres-password
+      properties:
+        value: ${databasePassword.result}
+
+  azureClientSecret:
+    type: azure-native:keyvault:Secret
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: ${backstageKeyVault.name}
+      secretName: azure-client-secret
+      properties:
+        value: ${backstageAzureApplicationPassword.value}
+
+  azureDevOpsPatSecret:
+    type: azure-native:keyvault:Secret
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: ${backstageKeyVault.name}
+      secretName: azure-devops-pat
+      properties:
+        value: ${azureDevOpsPat}
+
+  techRadarUrlSecret:
+    type: azure-native:keyvault:Secret
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: ${backstageKeyVault.name}
+      secretName: tech-radar-url
+      properties:
+        value: ${techRadarUrl}
+
+  catalogOrgYamlBase64Secret:
+    type: azure-native:keyvault:Secret
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: ${backstageKeyVault.name}
+      secretName: catalog-org-yaml-base64
+      properties:
+        value: ${catalogOrgYamlBase64}
+
+  githubTokenSecret:
+    type: azure-native:keyvault:Secret
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: ${backstageKeyVault.name}
+      secretName: github-token
+      properties:
+        value: ${githubToken}
+
+  githubOAuthClientSecretVaultSecret:
+    type: azure-native:keyvault:Secret
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      vaultName: ${backstageKeyVault.name}
+      secretName: github-oauth-client-secret
+      properties:
+        value: ${githubOAuthClientSecret}
+
+  backstagePostgresqlServer:
+    type: azure-native:dbforpostgresql:Server
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      location: ${deploymentLocation}
+      sku:
+        name: Standard_D2ds_v4
+        tier: GeneralPurpose
+      storage:
+        storageSizeGB: 32
+      backup:
+        geoRedundantBackup: Disabled
+      version: '16'
+      administratorLogin: backstage
+      administratorLoginPassword: ${databasePassword.result}
+      serverName: backstage-${environmentName}-${resourceNameSuffix.result}
+
+  backstagePostgresqlFirewallRule:
+    type: azure-native:dbforpostgresql:FirewallRule
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      serverName: ${backstagePostgresqlServer.name}
+      startIpAddress: 0.0.0.0
+      endIpAddress: 0.0.0.0
+
+  backstagePostgresqlDatabase:
+    type: azure-native:dbforpostgresql:Database
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      serverName: ${backstagePostgresqlServer.name}
+      collation: en_US.utf8
+      charset: UTF8
+
+  backstageAppServicePlan:
+    type: azure-native:web:AppServicePlan
+    properties:
+      resourceGroupName: ${resourceGroup.name}
+      location: ${deploymentLocation}
+      kind: Linux
+      sku:
+        name: S2
+        tier: Standard
+      reserved: true
+      isSpot: false
+
+  backstageWebApp:
+    type: azure-native:web:WebApp
+    properties:
+      name: backstage-${environmentName}-${resourceNameSuffix.result}
+      resourceGroupName: ${resourceGroup.name}
+      location: ${deploymentLocation}
+      serverFarmId: ${backstageAppServicePlan.id}
+      kind: app,linux,container
+      identity:
+        type: SystemAssigned
+      siteConfig:
+        cors:
+          supportCredentials: true
+          allowedOrigins:
+            - https://backstage-${environmentName}-${resourceNameSuffix.result}.azurewebsites.net
+        httpLoggingEnabled: true
+        acrUseManagedIdentityCreds: true
+        linuxFxVersion: DOCKER|${backstageImage.ref}
+
+  webAppAcrPullRoleAssignment:
+    type: azure-native:authorization:RoleAssignment
+    properties:
+      principalId: ${backstageWebApp.identity.principalId}
+      roleDefinitionId: ${acrPullRoleDefinition.id}
+      scope: ${backstageContainerRegistry.id}
+      principalType: ServicePrincipal
+
+  webAppKeyVaultSecretsUserRoleAssignment:
+    type: azure-native:authorization:RoleAssignment
+    properties:
+      principalId: ${backstageWebApp.identity.principalId}
+      roleDefinitionId: ${keyVaultSecretsUserRoleDefinition.id}
+      scope: ${backstageKeyVault.id}
+      principalType: ServicePrincipal
+
+  backstageWebAppSettings:
+    type: azure-native:web:WebAppApplicationSettings
+    properties:
+      name: ${backstageWebApp.name}
+      resourceGroupName: ${resourceGroup.name}
+      properties:
+        POSTGRES_HOST: ${backstagePostgresqlServer.fullyQualifiedDomainName}
+        POSTGRES_PORT: '5432'
+        POSTGRES_USER: ${backstagePostgresqlServer.administratorLogin}
+        POSTGRES_PASSWORD: '@Microsoft.KeyVault(SecretUri=${postgresPasswordSecret.properties.secretUriWithVersion})'
+        APPINSIGHTS_INSTRUMENTATIONKEY: ${backstageAppInsights.instrumentationKey}
+        DOCKER_ENABLE_CI: 'true'
+        WEBSITES_PORT: '7007'
+        PORT: '8080'
+        BACKSTAGE_BASE_URL: https://backstage-${environmentName}-${resourceNameSuffix.result}.azurewebsites.net
+        APP_CONFIG_backend_database_connection_ssl_required: 'true'
+        APP_CONFIG_backend_database_connection_ssl_rejectUnauthorized: 'true'
+        AZURE_CLIENT_ID: ${backstageAzureApplication.clientId}
+        AZURE_CLIENT_SECRET: '@Microsoft.KeyVault(SecretUri=${azureClientSecret.properties.secretUriWithVersion})'
+        AZURE_TENANT_ID: ${azureadConfig.tenantId}
+        AZDO_PAT: '@Microsoft.KeyVault(SecretUri=${azureDevOpsPatSecret.properties.secretUriWithVersion})'
+        TECH_RADAR_URL: '@Microsoft.KeyVault(SecretUri=${techRadarUrlSecret.properties.secretUriWithVersion})'
+        AZURE_DEVOPS_ORGANIZATION: ${azureDevOpsOrganization}
+        AZURE_DEVOPS_PROJECT: ${azureDevOpsProject}
+        AZURE_DEVOPS_REPOSITORY: ${azureDevOpsRepository}
+        GITHUB_TOKEN: '@Microsoft.KeyVault(SecretUri=${githubTokenSecret.properties.secretUriWithVersion})'
+        AUTH_GITHUB_CLIENT_ID: ${githubOAuthClientId}
+        GITHUB_ORG: ${githubOrg}
+        AUTH_GITHUB_CLIENT_SECRET: '@Microsoft.KeyVault(SecretUri=${githubOAuthClientSecretVaultSecret.properties.secretUriWithVersion})'
+        CATALOG_ORG_YAML_BASE64: '@Microsoft.KeyVault(SecretUri=${catalogOrgYamlBase64Secret.properties.secretUriWithVersion})'
+        KEY_VAULT_ROLE_ASSIGNMENT_ID: ${webAppKeyVaultSecretsUserRoleAssignment.id}
+
+outputs:
+  repoDigest: ${backstageImage.ref}
+  backstageWebAppUrl: https://${backstageWebApp.defaultHostName}
+  resourceGroupName: ${resourceGroup.name}
+  keyVaultName: ${backstageKeyVault.name}
+  keyVaultId: ${backstageKeyVault.id}
